@@ -1,10 +1,10 @@
 <html>
 
 <header>
-	<script src="http://code.jquery.com/jquery-1.10.1.min.js"></script>
+	<script src="js/jquery-1.10.2.min.js"></script>
 
-	<link rel="stylesheet" href="http://cdn.leafletjs.com/leaflet-0.6.4/leaflet.css" />
-	<script src="http://cdn.leafletjs.com/leaflet-0.6.4/leaflet.js"></script>
+	<link rel="stylesheet" href="js/leaflet/leaflet.css" />
+	<script src="js/leaflet/leaflet.js"></script>
 	
 	<script src="js/TileLayer.TileJSON.js"></script>
 	
@@ -15,9 +15,9 @@
 <body>
 	<div id="map" style="width:100%;height: 100%"></div>
 	<script>
-		var map = L.map('map',{
-			//crs: new L.Proj.CRS("EPSG:32719","+proj=utm +zone=19 +south +ellps=WGS84 +datum=WGS84 +units=m +no_defs ")
-		}).setView([-0.2298500, -78.5249500], 8);
+
+		// Centered in Quito, Ecuador
+		var map = L.map('map').setView([-0.2298500, -78.5249500], 8);
 		L.tileLayer('http://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
 		    attribution: 'Map data &copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors, <a href="http://creativecommons.org/licenses/by-sa/2.0/">CC-BY-SA</a>, Imagery © <a href="http://cloudmade.com">CloudMade</a>',
 		    maxZoom: 18
@@ -25,71 +25,7 @@
 
 		var requests = 0;
 
-		var aricaLayer = new L.TileLayer.TileJSON({
-	        debug: false,
-	        // this value should be equal to 'radius' of your points        
-	        buffer: 5,
-	        request: {
-	        	dataType: "jsonp",
-	        	jsonp: false
-	        }
-	    });
-	    aricaLayer.createRequest = function (bounds) {
-	    	if(!this.proj) {
-	    		this.proj = new L.Proj.CRS("EPSG:32719","+proj=utm +zone=19 +south +ellps=WGS84 +datum=WGS84 +units=m +no_defs ");
-	    	}
-
-	    	var min = this.proj.latLngToPoint(L.latLng(bounds[1],bounds[0]));
-	    	var max = this.proj.latLngToPoint(L.latLng(bounds[3],bounds[2]));
-
-	    	requests++;
-
-	    	var requestCallback = "parseRequest"+requests;
-
-	    	//var url = 'http://localhost/geoserver/wfs?SERVICE=WFS&version=1.1.0&request=GetFeature&typeName=comunas&outputFormat=application/json&srsName=EPSG:4326'
-	        
-	        var url = ['http://sir.gorearicayparinacota.cl/geoserver/wfs?SERVICE=WFS&version=1.1.0&request=GetFeature&typeName=comunas&outputFormat=text/javascript&srsName=EPSG:4326&format_options=callback:'+requestCallback+'&BBOX=',
-	            min.x, ',',
-	            min.y, ',',
-	            max.x, ',',
-	            -max.y
-	        ].join('');
-	        return { url:url, jsonpCallback: requestCallback};
-	    };
-	    aricaLayer.styleFor = function (feature) {
-	        var type = feature.geometry.type;
-	        switch (type) {
-	            case 'Point':
-	            case 'MultiPoint':
-	                return {
-	                    color: 'rgba(252,146,114,0.6)',
-	                    radius: 5
-	                };
-	                
-	            case 'LineString':
-	            case 'MultiLineString':
-	                return {
-	                    color: 'rgba(161,217,155,0.8)',
-	                    size: 3
-	                };
-	 
-	            case 'Polygon':
-	            case 'MultiPolygon':
-	                return {
-	                    color: 'rgba(43,140,190,0.4)',
-	                    outline: {
-	                        color: 'rgb(0,0,0)',
-	                        size: 1
-	                    }
-	                };
-	 
-	            default:
-	                return null;
-	        }
-	    };
-	    //aricaLayer.addTo(map);
-
-	    var trafficLayer =  new L.TileLayer.TileJSON({
+		var trafficLayer =  new L.TileLayer.TileJSON({
 	        debug: false,
 	        // this value should be equal to 'radius' of your points        
 	        buffer: 5,
@@ -103,10 +39,7 @@
 	    	requests++;
 
 	    	var requestCallback = "parseRequest"+requests;
-
-	    	//var url = 'http://localhost/geoserver/wfs?SERVICE=WFS&version=1.1.0&request=GetFeature&typeName=comunas&outputFormat=application/json&srsName=EPSG:4326'
-	        
-	        var url = ['http://37.139.29.45:8080/geoserver/wfs?request=GetFeature&typeName=icm_traffic&outputFormat=text/javascript&srsName=EPSG:4326&format_options=callback:'+requestCallback+'&BBOX=',
+	    	var url = ['http://37.139.29.45:8080/geoserver/wfs?request=GetFeature&typeName=icm_traffic&outputFormat=text/javascript&srsName=EPSG:4326&format_options=callback:'+requestCallback+'&BBOX=',
 	            bounds[1], ',',
 	            bounds[0], ',',
 	            bounds[3], ',',
