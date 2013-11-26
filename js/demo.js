@@ -11,7 +11,10 @@ function initMap() {
 
 	var requests = 0;
 
+	var higlightLayer = L.geoJson().addTo(map);
+
 	var trafficLayer = new L.TileLayer.TileJSON({
+		id: "traffic_layer",
 		debug: false,
 		// this value should be equal to 'radius' of your points        
 		buffer: 5,
@@ -78,6 +81,14 @@ function initMap() {
 	};
 
 	trafficLayer.addTo(map);
+	trafficLayer.on("featuresClicked", function(e){
+		var content = "";
+		for(var i=0; i<e.features.length; i++) {
+			content+="<p>"+JSON.stringify(e.features[i].properties)+"</p>";			
+		}
+		higlightLayer.addData(e.features);
+		L.popup().setLatLng(e.clickEvent.latlng).setContent(content).openOn(map);
+	});
 }
 
 $(document).ready(initMap);

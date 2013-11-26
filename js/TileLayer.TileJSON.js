@@ -1,22 +1,32 @@
 L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
     options: {
+        id: null,
         debug: false,
         request: {
 
         }
     },
- 
+
+    layerCounter: 0,
+    tree: null,
     tileSize: 256,
  
     initialize: function (options) {
         L.Util.setOptions(this, options);
- 
+
+        L.TileLayer.TileJSON.prototype.layerCounter++;
+
         this.drawTile = function (canvas, tilePoint, zoom) {
             var ctx = {
                 canvas: canvas,
                 tile: tilePoint,
                 zoom: this._getZoomForUrl() // fix for https://github.com/CloudMade/Leaflet/pull/993
             };
+
+            if(this.tree==null || this.lastZoom!=zoom) {
+                this.tree = rbush(9, ['.minx', '.miny', '.maxx', '.maxy']);    
+                this.lastZoom = zoom;
+            }            
  
             if (this.options.debug) {
                 this._drawDebugInfo(ctx);
@@ -24,7 +34,16 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
             this._draw(ctx);
         };
     },
- 
+
+    onAdd: function (map) {
+
+        L.TileLayer.Canvas.prototype.onAdd.call(this, map);
+
+        map.on("click", function(e) {
+            this._onClick(e);
+        },this);
+    },
+
     _drawDebugInfo: function (ctx) {
         var max = this.tileSize;
         var g = ctx.canvas.getContext('2d');
@@ -266,52 +285,119 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
         var bounds = [nwCoord.lng, seCoord.lat, seCoord.lng, nwCoord.lat];
  
         var request = this.createRequest(bounds,ctx);
-        var self = this, j;
+        var self = this;
         loader($.extend(request, {          
             success: function (data) {
             for (var i = 0; i < data.features.length; i++) {
                 var feature = data.features[i];
-                var style = self.styleFor(feature);
- 
-                var type = feature.geometry.type;
-                var geom = feature.geometry.coordinates;
-                var len = geom.length;
-                switch (type) {
-                    case 'Point':
-                        self._drawPoint(ctx, geom, style, feature.properties);
-                        break;
- 
-                    case 'MultiPoint':
-                        for (j = 0; j < len; j++) {
-                            self._drawPoint(ctx, geom[j], style);
-                        }
-                        break;
- 
-                    case 'LineString':
-                        self._drawLineString(ctx, geom, style);
-                        break;
- 
-                    case 'MultiLineString':
-                        for (j = 0; j < len; j++) {
-                            self._drawLineString(ctx, geom[j], style);
-                        }
-                        break;
- 
-                    case 'Polygon':
-                        self._drawPolygon(ctx, geom, style);
-                        break;
- 
-                    case 'MultiPolygon':
-                        for (j = 0; j < len; j++) {
-                            self._drawPolygon(ctx, geom[j], style);
-                        }
-                        break;
- 
-                    default:
-                        throw new Error('Unmanaged type: ' + type);
-                }
+
+                // We store the retrieved features in a search tree.
+                var treeNode = self._createTreeData(feature);
+                self.tree.insert(treeNode);
+
+                self._drawFeature(feature, ctx);
             }
         }}, this.options.request));
+    },
+
+    _createTreeData: function(feature) {
+        var points = [];
+        var type = feature.geometry.type;
+        var geom = feature.geometry.coordinates;
+         switch (type) {
+            case 'Point':
+            case 'LineString':
+            case 'Polygon':
+                points = geom;
+                break;
+
+            case 'MultiPoint':
+            case 'MultiLineString':
+            case 'MultiPolygon':
+                for(var j=0; j< geom.length;j++) {
+                    points = points.concat(geom[j]);
+                }
+                break;
+
+            default:
+                throw new Error('Unmanaged type: ' + type);
+        }
+
+        var bbox = L.bounds(points);
+
+        return {
+            id: feature.properties.id,
+            feature: feature,
+            minx: bbox.min.x,
+            maxx: bbox.max.x,
+            miny: bbox.min.y,
+            maxy: bbox.max.y};
+
+    },
+
+    _drawFeature: function(feature, ctx) {
+        var style = this.styleFor(feature);
+ 
+        var type = feature.geometry.type;
+        var geom = feature.geometry.coordinates;
+        var len = geom.length;
+        var j;
+        switch (type) {
+            case 'Point':
+                this._drawPoint(ctx, geom, style, feature.properties);
+                break;
+
+            case 'MultiPoint':
+                for (j = 0; j < len; j++) {
+                    this._drawPoint(ctx, geom[j], style);
+                }
+                break;
+
+            case 'LineString':
+                this._drawLineString(ctx, geom, style);
+                break;
+
+            case 'MultiLineString':
+                for (j = 0; j < len; j++) {
+                    this._drawLineString(ctx, geom[j], style);
+                }
+                break;
+
+            case 'Polygon':
+                this._drawPolygon(ctx, geom, style);
+                break;
+
+            case 'MultiPolygon':
+                for (j = 0; j < len; j++) {
+                    this._drawPolygon(ctx, geom[j], style);
+                }
+                break;
+
+            default:
+                throw new Error('Unmanaged type: ' + type);
+        }
+    },
+
+    _onClick: function(e) {
+        var latLng = e.latlng;
+        var result = this.tree.search([latLng.lng,latLng.lat,latLng.lng,latLng.lat]);
+
+        var features = [];
+        var ids = [];
+        for(var i=0; i<result.length; i++) {
+            var feature = result[i].feature;
+            if(ids.indexOf(feature.properties.id)<0) {
+                features.push(result[i].feature); 
+                ids.push(feature.properties.id);
+            }
+        }
+
+        if(result.length>0) {
+            this.fireEvent("featuresClicked", {
+                clickEvent: e,
+                features: features
+            });
+        }
     },
  
     // NOTE: a placeholder for a function that, given a tile context, returns a string to a GeoJSON service that retrieve features for that context
