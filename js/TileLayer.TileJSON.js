@@ -2,6 +2,7 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
     options: {
         id: null,
         debug: false,
+        reloadOnUpdate: true,
         request: {
 
         }
@@ -23,14 +24,15 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
                 zoom: this._getZoomForUrl() // fix for https://github.com/CloudMade/Leaflet/pull/993
             };
 
-            if(this.tree==null || this.lastZoom!=zoom) {
-                this.tree = rbush(9, ['.minx', '.miny', '.maxx', '.maxy']);    
+            if(this.tree===null || this.lastZoom!=zoom) {
+                this.tree = rbush(9, ['.minx', '.miny', '.maxx', '.maxy']);
                 this.lastZoom = zoom;
-            }            
+            }
  
             if (this.options.debug) {
                 this._drawDebugInfo(ctx);
             }
+
             this._draw(ctx);
         };
     },
@@ -39,8 +41,8 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
 
         L.TileLayer.Canvas.prototype.onAdd.call(this, map);
 
-        map.on("click", function(e) {
-            this._onClick(e);
+        map.on("click", function(e) {            
+            this._onClick(e);                            
         },this);
     },
 
@@ -114,7 +116,7 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
         var visible = diff0 > 1 || diff1 > 1;
         return visible;
     },
- 
+
     _drawPoint: function (ctx, geom, style, properties) {
         if (!style) {
             return;
@@ -186,7 +188,7 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
 
                     var d = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
 
-                    if (d < 0.000000001) {
+                    if (d < 0.0000000000001) {
                         // Very small denominators make the calculation go crazy.
                         p.x = p.x + offset * normal.x;
                         p.y = p.y + offset * normal.y;
@@ -266,6 +268,28 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
         // NOTE: this is the only part of the code that depends from external libraries (actually, jQuery only).        
         var loader = $.ajax;
  
+        var bounds = this._tileBounds(ctx);
+ 
+        var request = this.createRequest(bounds,ctx);
+        var timerName = request.jsonpCallback+".requestFeatures."+ctx.tile.x+"/"+ctx.tile.y+"/"+ctx.zoom;
+        console.time(timerName);
+
+        var self = this;
+        loader($.extend(request, {          
+            success: function (data) {                
+                console.timeEnd(timerName);
+
+                timerName = request.jsonpCallback+".drawFeatures."+ctx.tile.x+"/"+ctx.tile.y+"/"+ctx.zoom;
+                console.time(timerName);
+
+                self._drawFeatures(data.features, ctx);
+
+                console.timeEnd(timerName);
+
+            }}, this.options.request));
+    },
+
+    _tileBounds: function(ctx) {
         var nwPoint = ctx.tile.multiplyBy(this.tileSize);
         var sePoint = nwPoint.add(new L.Point(this.tileSize, this.tileSize));
  
@@ -282,28 +306,72 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
  
         var nwCoord = this._map.unproject(nwPoint, ctx.zoom, true);
         var seCoord = this._map.unproject(sePoint, ctx.zoom, true);
-        var bounds = [nwCoord.lng, seCoord.lat, seCoord.lng, nwCoord.lat];
- 
-        var request = this.createRequest(bounds,ctx);
-        var self = this;
-        loader($.extend(request, {          
-            success: function (data) {
-            for (var i = 0; i < data.features.length; i++) {
-                var feature = data.features[i];
-
-                // We store the retrieved features in a search tree.
-                var treeNode = self._createTreeData(feature);
-                self.tree.insert(treeNode);
-
-                self._drawFeature(feature, ctx);
-            }
-        }}, this.options.request));
+        return [nwCoord.lng, seCoord.lat, seCoord.lng, nwCoord.lat];
     },
 
-    _createTreeData: function(feature) {
+    _drawFeatures: function(features, ctx, skipTree) {
+        var i;
+
+         // we clean the canvas...
+        if(ctx.canvas) {
+            var g = ctx.canvas.getContext('2d');     
+            g.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);    
+        }
+        
+
+        // We generate styles and store the features with their associated styles
+        // and index.
+        var zBuffer = [];
+        for (i = 0; i < features.length; i++) {
+            var feature = features[i];
+
+            // We store the retrieved features in a search tree.
+            if(!skipTree) {
+                var treeNode = this._createTreeData(feature,ctx.tile);
+                this.tree.insert(treeNode);
+            } 
+            
+
+            var style = this.styleFor(feature);
+
+            zBuffer.push({
+                style: style,
+                zIndex: !!style.zIndex?style.zIndex:0,
+                feature: feature
+            });
+        }
+
+        // We use the zIndex to order the features
+        zBuffer.sort(function(f1,f2) {
+            return f1.zIndex - f2.zIndex;
+        });
+
+        for (i = 0; i < zBuffer.length; i++) {
+            var oFeature = zBuffer[i];
+            this._drawFeature(oFeature.feature, oFeature.style, ctx);
+        }
+    },
+
+    _createTreeData: function(feature, tilePoint) {
+        
+        var bbox = this._featureBBox(feature);
+
+        return {
+            id: feature.properties.id,
+            feature: feature,
+            minx: bbox.min.x,
+            maxx: bbox.max.x,
+            miny: bbox.min.y,
+            maxy: bbox.max.y,
+            tilePoint: tilePoint
+        };
+
+    },
+
+    _featureBBox: function(feature) {
         var points = [];
-        var type = feature.geometry.type;
         var geom = feature.geometry.coordinates;
+        var type = feature.geometry.type;
          switch (type) {
             case 'Point':
             case 'LineString':
@@ -323,21 +391,10 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
                 throw new Error('Unmanaged type: ' + type);
         }
 
-        var bbox = L.bounds(points);
-
-        return {
-            id: feature.properties.id,
-            feature: feature,
-            minx: bbox.min.x,
-            maxx: bbox.max.x,
-            miny: bbox.min.y,
-            maxy: bbox.max.y};
-
+        return L.bounds(points);
     },
 
-    _drawFeature: function(feature, ctx) {
-        var style = this.styleFor(feature);
- 
+    _drawFeature: function(feature, style, ctx) {
         var type = feature.geometry.type;
         var geom = feature.geometry.coordinates;
         var len = geom.length;
@@ -387,6 +444,7 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
         for(var i=0; i<result.length; i++) {
             var feature = result[i].feature;
             if(ids.indexOf(feature.properties.id)<0) {
+                // TODO: Check that the feature was actually clicked
                 features.push(result[i].feature); 
                 ids.push(feature.properties.id);
             }
@@ -398,6 +456,55 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
                 features: features
             });
         }
+    },
+
+    updateFeature: function(feature) {
+        // We retrieve the intersecting features, that must be redrawn.
+        var bbox = this._featureBBox(feature);
+        var intersectingFeatureNodes = this.tree.search([bbox.min.x,bbox.min.y,bbox.max.x,bbox.max.y]);
+
+        // we determine the tiles to be redrawn from the features.
+        var readdedTileKeys=[];
+        for(var i=0; i < intersectingFeatureNodes.length; i++) {
+            var featureTilePoint = intersectingFeatureNodes[i].tilePoint;
+            var key=featureTilePoint.x+":"+featureTilePoint.y;
+
+            if(readdedTileKeys.indexOf(key)<0) {
+
+                readdedTileKeys.push(key);
+                var tile = this._tiles[key];  
+                if(this.options.reloadOnUpdate){                                     
+                    this._loadTile(tile, featureTilePoint);
+                } else {
+
+                    var ctx = {
+                        canvas: tile,
+                        tile: featureTilePoint,
+                        zoom: this._getZoomForUrl() // fix for https://github.com/CloudMade/Leaflet/pull/993
+                    };
+
+
+                    var tileFeatures = this.tree.search(this._tileBounds(ctx));
+                    
+                    var updatedFeatures = [];
+                    for(var j=0; j< tileFeatures.length; j++ ){
+                        var existingFeature = tileFeatures[j].feature;
+
+                        if(existingFeature.properties.id == feature.properties.id) {
+                            // We update the data!!!!
+                            for(var field in feature) {
+                                existingFeature[field] = feature[field];
+                            }
+                        }
+
+                        updatedFeatures.push(existingFeature);    
+                    }
+
+                    this._drawFeatures(updatedFeatures, ctx, true);
+                }
+            }
+        }
+
     },
  
     // NOTE: a placeholder for a function that, given a tile context, returns a string to a GeoJSON service that retrieve features for that context
