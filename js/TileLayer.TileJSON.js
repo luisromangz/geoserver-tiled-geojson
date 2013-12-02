@@ -2,7 +2,8 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
     options: {
         id: null,
         debug: false,
-        reloadOnUpdate: true,
+        reloadOnUpdate: false,
+        enableOffset: true,
         request: {
 
         }
@@ -41,9 +42,14 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
 
         L.TileLayer.Canvas.prototype.onAdd.call(this, map);
 
+        this.map = map;
+
         map.on("click", function(e) {            
             this._onClick(e);                            
         },this);
+
+        map.on("dragstart",function(){this.dragging=true;},this);
+        map.on("dragend",function(){this.dragging=false;},this);
     },
 
     _drawDebugInfo: function (ctx) {
@@ -63,14 +69,18 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
  
     _tilePoint: function (ctx, coords) {
         // start coords to tile 'space'
-        var s = ctx.tile.multiplyBy(this.tileSize);
+       
+        if(!ctx.s) {
+            ctx.s= ctx.tile.multiplyBy(this.tileSize);  
+        } 
  
         // actual coords to tile 'space'
-        var p = this._map.project(new L.LatLng(coords[1], coords[0]));
+        //var p = this._map.project(new L.LatLng(coords[1], coords[0]));
+        var p = this._map.options.crs.latLngToPoint({lat: coords[1],lng: coords[0]}, ctx.zoom);
  
         // point to draw        
-        var x = Math.round(p.x - s.x);
-        var y = Math.round(p.y - s.y);
+        var x = Math.round(p.x - ctx.s.x);
+        var y = Math.round(p.y - ctx.s.y);
         return {
             x: x,
             y: y
@@ -144,11 +154,14 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
             proj.push(this._tilePoint(ctx, coords[i]));
         }
 
+        proj = L.LineUtil.simplify(proj, 3);
 
-        proj = L.LineUtil.simplify(proj, 2);
+        if (!this._isActuallyVisible(proj)) {
+            return;
+        }
 
         var offset = style.offset;
-        if(!offset) {
+        if(!this.options.enableOffset || !offset) {
             offset =0;
         }
         if (offset !== 0) {
@@ -202,10 +215,6 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
                 }
             }
 
-        }
-
-        if (!this._isActuallyVisible(proj)) {
-            return;
         }
  
         var g = ctx.canvas.getContext('2d');
@@ -279,12 +288,8 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
             success: function (data) {                
                 console.timeEnd(timerName);
 
-                timerName = request.jsonpCallback+".drawFeatures."+ctx.tile.x+"/"+ctx.tile.y+"/"+ctx.zoom;
-                console.time(timerName);
-
+               
                 self._drawFeatures(data.features, ctx);
-
-                console.timeEnd(timerName);
 
             }}, this.options.request));
     },
@@ -310,17 +315,20 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
     },
 
     _drawFeatures: function(features, ctx, skipTree) {
+        timerName = ".drawFeatures."+ctx.tile.x+"/"+ctx.tile.y+"/"+ctx.zoom;
+        console.time(timerName);
+
         var i;
 
          // we clean the canvas...
-        if(ctx.canvas) {
-            var g = ctx.canvas.getContext('2d');     
+        if(ctx.canvas) {            
+            var g = ctx.canvas.getContext('2d');                             
             g.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);    
-        }
-        
+        }        
 
         // We generate styles and store the features with their associated styles
         // and index.
+        console.time("styles")
         var zBuffer = [];
         for (i = 0; i < features.length; i++) {
             var feature = features[i];
@@ -329,10 +337,11 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
             if(!skipTree) {
                 var treeNode = this._createTreeData(feature,ctx.tile);
                 this.tree.insert(treeNode);
-            } 
-            
+            }             
 
-            var style = this.styleFor(feature);
+            var style = this.styleFor(feature);            
+
+            feature._dirty = false;
 
             zBuffer.push({
                 style: style,
@@ -340,8 +349,9 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
                 feature: feature
             });
         }
+        console.timeEnd("styles");
 
-        // We use the zIndex to order the features
+        // We use the zIndex to order the features        
         zBuffer.sort(function(f1,f2) {
             return f1.zIndex - f2.zIndex;
         });
@@ -350,6 +360,10 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
             var oFeature = zBuffer[i];
             this._drawFeature(oFeature.feature, oFeature.style, ctx);
         }
+
+
+        console.timeEnd(timerName);
+
     },
 
     _createTreeData: function(feature, tilePoint) {
@@ -473,8 +487,13 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
 
                 readdedTileKeys.push(key);
                 var tile = this._tiles[key];  
-                if(this.options.reloadOnUpdate){                                     
-                    this._loadTile(tile, featureTilePoint);
+                if(this.options.reloadOnUpdate){  
+                    if(tile) {
+                        this._loadTile(tile, featureTilePoint);    
+                    } else {
+                        this._addTile(featureTilePoint, this._tileContainer);
+                    }
+                    
                 } else {
 
                     var ctx = {
@@ -493,14 +512,28 @@ L.TileLayer.TileJSON = L.TileLayer.Canvas.extend({
                         if(existingFeature.properties.id == feature.properties.id) {
                             // We update the data!!!!
                             for(var field in feature) {
-                                existingFeature[field] = feature[field];
+                                if(feature.hasOwnProperty(field)){
+                                    existingFeature[field] = feature[field];    
+                                }
+                                
                             }
+
+                            existingFeature._dirty = true;
                         }
 
+                       // existingFeature.properties.color = this.dragging?"green":"blue";
                         updatedFeatures.push(existingFeature);    
                     }
 
-                    this._drawFeatures(updatedFeatures, ctx, true);
+                    if(!this.dragging) {
+                        // To prevent redraws while dragging.
+                        this._drawFeatures(updatedFeatures, ctx,true);
+                    } else {
+                        this.map.addOneTimeEventListener("dragend", function() {
+                            this._drawFeatures(updatedFeatures, ctx,true);
+                        },this)
+                    }
+                    
                 }
             }
         }
